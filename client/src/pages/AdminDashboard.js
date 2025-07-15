@@ -636,6 +636,7 @@ export default function AdminDashboard() {
                   <div className="bg-white p-6 rounded shadow w-full max-w-2xl overflow-y-auto max-h-[90vh]">
                     <h2 className="text-lg font-bold mb-2">Client: {selectedClient.username}</h2>
                     <div className="mb-2 text-sm text-gray-600">Email: {selectedClient.email}</div>
+                    <div className="mb-2 text-sm text-gray-600">UPI ID: {clientDetails.client.upi_id || 'Not set'}</div>
                     <div className="mb-2 text-sm text-gray-600">Balance: ₹{clientDetails.client.balance}</div>
                     <div className="mb-2 text-sm text-gray-600">Total Earned: ₹{clientDetails.client.total_earned}</div>
                     <button

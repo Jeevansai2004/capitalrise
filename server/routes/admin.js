@@ -160,7 +160,7 @@ router.get('/clients/:id', adminAuth, async (req, res) => {
     const { id } = req.params;
     // Get client info
     const client = await db.get(`
-      SELECT u.id, u.username, u.email, u.created_at, cb.balance, cb.total_earned
+      SELECT u.id, u.username, u.email, u.created_at, u.upi_id, cb.balance, cb.total_earned
       FROM users u
       LEFT JOIN client_balances cb ON u.id = cb.user_id
       WHERE u.id = ? AND u.role = 'client'

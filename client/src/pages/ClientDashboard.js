@@ -761,6 +761,51 @@ export default function ClientDashboard() {
           </div>
         </div>
       )}
+
+      {/* UPI ID Update Modal */}
+      {changeUpiId && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white p-6 rounded-lg shadow-lg w-full max-w-md">
+            <h2 className="text-xl font-bold mb-4">Update UPI ID</h2>
+            <form onSubmit={handleUpiIdChange} className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Account Password</label>
+                <Input
+                  type="password"
+                  value={upiForm.account_password}
+                  onChange={(e) => setUpiForm({ ...upiForm, account_password: e.target.value })}
+                  placeholder="Enter your account password"
+                  required
+                />
+                {upiErrors.account_password && (
+                  <div className="text-red-600 text-sm mt-1">{upiErrors.account_password}</div>
+                )}
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">New UPI ID</label>
+                <Input
+                  type="text"
+                  value={upiForm.new_upi_id}
+                  onChange={(e) => setUpiForm({ ...upiForm, new_upi_id: e.target.value })}
+                  placeholder="Enter new UPI ID"
+                  required
+                />
+                {upiErrors.new_upi_id && (
+                  <div className="text-red-600 text-sm mt-1">{upiErrors.new_upi_id}</div>
+                )}
+              </div>
+              <div className="flex gap-2">
+                <Button type="submit" loading={loading} className="flex-1">
+                  Update UPI ID
+                </Button>
+                <Button type="button" variant="secondary" onClick={() => setChangeUpiId(false)} className="flex-1">
+                  Cancel
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
