@@ -365,7 +365,7 @@ export default function AdminDashboard() {
   };
 
   const handleCredentialsAccess = async () => {
-    if (adminPassword !== 'Jeevan@123') {
+    if (adminPassword !== 'admin123') {
       setCredentialsError('Invalid admin password');
       return;
     }

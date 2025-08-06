@@ -13,7 +13,8 @@
     "postinstall": "cd client && npm install",
     "db:init": "node server/database/init-database.js",
     "db:backup": "node server/database/backup-data.js backup",
-    "db:restore": "node server/database/backup-data.js restore"
+    "db:restore": "node server/database/backup-data.js restore",
+    "db:create-admin": "node server/database/create-admin.js"
   },
   "keywords": [
     "investment",
