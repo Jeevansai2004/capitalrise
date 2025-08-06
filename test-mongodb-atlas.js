@@ -1,8 +1,8 @@
 require('dotenv').config();
 const { MongoClient } = require('mongodb');
 
-// Your MongoDB Atlas connection string
-const uri = process.env.MONGO_URI || 'mongodb+srv://saijeevan362:<db_password>@capitalrisecluster.fauhhu9.mongodb.net/capital_rise?retryWrites=true&w=majority&appName=CapitalRiseCluster';
+// Your MongoDB Atlas connection string with your actual password
+const uri = process.env.MONGO_URI || 'mongodb+srv://saijeevan362:7XHXg9dQM2uuIdm4@capitalrisecluster.fauhhu9.mongodb.net/capital_rise?retryWrites=true&w=majority&appName=CapitalRiseCluster';
 const dbName = process.env.MONGO_DB || 'capital_rise';
 
 console.log('🔍 Testing MongoDB Atlas Connection...');
@@ -42,7 +42,7 @@ async function testConnection() {
   } catch (error) {
     console.error('❌ MongoDB Atlas connection failed:', error.message);
     console.log('\n🔧 Troubleshooting tips:');
-    console.log('1. Make sure you replaced <db_password> with your actual password');
+    console.log('1. Make sure your password is correct: 7XHXg9dQM2uuIdm4');
     console.log('2. Check if your IP address is whitelisted in MongoDB Atlas');
     console.log('3. Verify your database user has the correct permissions');
     console.log('4. Ensure your cluster is running and accessible');

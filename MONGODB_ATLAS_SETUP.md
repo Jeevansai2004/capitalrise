@@ -20,7 +20,7 @@ CLIENT_URL=http://localhost:3000
 JWT_SECRET=capital-rise-super-secret-jwt-key-2024
 
 # MongoDB Atlas Configuration
-MONGO_URI=mongodb+srv://saijeevan362:YOUR_ACTUAL_PASSWORD@capitalrisecluster.fauhhu9.mongodb.net/capital_rise?retryWrites=true&w=majority&appName=CapitalRiseCluster
+MONGO_URI=mongodb+srv://saijeevan362:JeevanSai%40123@capitalrisecluster.fauhhu9.mongodb.net/capital_rise?retryWrites=true&w=majority&appName=CapitalRiseCluster
 MONGO_DB=capital_rise
 
 # Rate Limiting
@@ -46,11 +46,7 @@ TWILIO_PHONE_NUMBER=+3197010208105
 TWILIO_WHATSAPP_NUMBER=+3197010208105
 ```
 
-### Step 2: Replace Your Password
-
-Replace `YOUR_ACTUAL_PASSWORD` in the MONGO_URI with your actual MongoDB Atlas password.
-
-### Step 3: Test Connection
+### Step 2: Test Connection
 
 Run this command to test your MongoDB Atlas connection:
 
@@ -58,7 +54,7 @@ Run this command to test your MongoDB Atlas connection:
 node test-mongodb-atlas.js
 ```
 
-### Step 4: Initialize Database
+### Step 3: Initialize Database
 
 Once connection is successful, initialize your database:
 
@@ -66,7 +62,7 @@ Once connection is successful, initialize your database:
 npm run db:init
 ```
 
-### Step 5: Start Your Application
+### Step 4: Start Your Application
 
 ```bash
 npm run dev
@@ -83,11 +79,14 @@ npm run dev
 1. Go to "Database Access"
 2. Create a user with "Read and write to any database" permissions
 3. Use the username: `saijeevan362`
+4. Password: `JeevanSai@123`
 
 ### Connection String Format
 ```
-mongodb+srv://saijeevan362:<password>@capitalrisecluster.fauhhu9.mongodb.net/capital_rise?retryWrites=true&w=majority&appName=CapitalRiseCluster
+mongodb+srv://saijeevan362:JeevanSai%40123@capitalrisecluster.fauhhu9.mongodb.net/capital_rise?retryWrites=true&w=majority&appName=CapitalRiseCluster
 ```
+
+**Note**: The `@` symbol in your password is URL-encoded as `%40`
 
 ## 📊 Database Collections
 
@@ -133,15 +132,22 @@ For Render deployment, set these environment variables:
 ## 🔍 Troubleshooting
 
 ### Connection Issues
-1. Check if password is correct
-2. Verify IP is whitelisted
-3. Ensure cluster is running
-4. Check user permissions
+1. **Authentication Failed**: 
+   - Verify username: `saijeevan362`
+   - Verify password: `JeevanSai@123`
+   - Check if user exists in MongoDB Atlas
+2. **Network Issues**:
+   - Add your IP to MongoDB Atlas Network Access
+   - Use "0.0.0.0/0" for all IPs (development only)
+3. **Cluster Issues**:
+   - Ensure cluster is running
+   - Check cluster status in Atlas dashboard
 
-### Performance Issues
-1. Create proper indexes
-2. Use connection pooling
-3. Monitor query performance
+### Password Encoding
+- `@` becomes `%40` in URL
+- `#` becomes `%23`
+- `%` becomes `%25`
+- `+` becomes `%2B`
 
 ## 📈 Monitoring
 
