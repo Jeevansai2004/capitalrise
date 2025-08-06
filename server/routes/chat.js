@@ -1,6 +1,6 @@
 const express = require('express');
 const { auth, adminAuth, clientAuth } = require('../middleware/auth');
-const db = require('../config/database');
+const { connectToDatabase } = require('../config/database');
 const moment = require('moment-timezone');
 
 const router = express.Router();
@@ -8,44 +8,40 @@ const router = express.Router();
 // Get chat messages
 router.get('/messages', auth, async (req, res) => {
   try {
+    const db = await connectToDatabase();
     const userId = req.user.id;
     const { page = 1, limit = 50 } = req.query;
-    const offset = (page - 1) * limit;
+    const skip = (page - 1) * limit;
 
-    let messages;
-    
+    let messages = [];
     if (req.user.role === 'admin') {
       // Admin can see all messages
-      messages = await db.all(`
-        SELECT 
-          m.*,
-          u.username as sender_name,
-          u.role as sender_role
-        FROM messages m
-        JOIN users u ON m.sender_id = u.id
-        ORDER BY m.created_at DESC
-        LIMIT ? OFFSET ?
-      `, [limit, offset]);
+      messages = await db.collection('messages')
+        .find({})
+        .sort({ created_at: -1 })
+        .skip(Number(skip))
+        .limit(Number(limit))
+        .toArray();
     } else {
       // Clients can only see their own messages with admin
-      messages = await db.all(`
-        SELECT 
-          m.*,
-          u.username as sender_name,
-          u.role as sender_role
-        FROM messages m
-        JOIN users u ON m.sender_id = u.id
-        WHERE (m.sender_id = ? AND m.receiver_id IS NULL) OR (m.receiver_id = ? AND m.sender_id IN (SELECT id FROM users WHERE role = 'admin'))
-        ORDER BY m.created_at DESC
-        LIMIT ? OFFSET ?
-      `, [userId, userId, limit, offset]);
+      messages = await db.collection('messages')
+        .find({
+          $or: [
+            { sender_id: userId, receiver_id: null },
+            { receiver_id: userId }
+          ]
+        })
+        .sort({ created_at: -1 })
+        .skip(Number(skip))
+        .limit(Number(limit))
+        .toArray();
     }
 
     // Mark messages as read for the current user
     if (req.user.role === 'client') {
-      await db.run(
-        'UPDATE messages SET is_read = 1 WHERE receiver_id = ? AND is_read = 0',
-        [userId]
+      await db.collection('messages').updateMany(
+        { receiver_id: userId, is_read: false },
+        { $set: { is_read: true } }
       );
     }
 
@@ -65,6 +61,7 @@ router.get('/messages', auth, async (req, res) => {
 // Send message
 router.post('/messages', auth, async (req, res) => {
   try {
+    const db = await connectToDatabase();
     const { message, receiver_id } = req.body;
     const senderId = req.user.id;
 
@@ -95,20 +92,16 @@ router.post('/messages', auth, async (req, res) => {
 
     // Create message with UTC ISO timestamp
     const timestamp = new Date().toISOString();
-    const result = await db.run(
-      'INSERT INTO messages (sender_id, receiver_id, message, is_admin_message, created_at) VALUES (?, ?, ?, ?, ?)',
-      [senderId, receiverId, message.trim(), isAdminMessage, timestamp]
-    );
+    const result = await db.collection('messages').insertOne({
+      sender_id: senderId,
+      receiver_id: receiverId,
+      message: message.trim(),
+      is_admin_message: isAdminMessage,
+      is_read: false,
+      created_at: timestamp
+    });
 
-    const newMessage = await db.get(`
-      SELECT 
-        m.*,
-        u.username as sender_name,
-        u.role as sender_role
-      FROM messages m
-      JOIN users u ON m.sender_id = u.id
-      WHERE m.id = ?
-    `, [result.id]);
+    const newMessage = await db.collection('messages').findOne({ _id: result.insertedId });
 
     res.status(201).json({
       success: true,
@@ -127,19 +120,17 @@ router.post('/messages', auth, async (req, res) => {
 // Get unread message count
 router.get('/unread-count', auth, async (req, res) => {
   try {
+    const db = await connectToDatabase();
     const userId = req.user.id;
     let count;
 
     if (req.user.role === 'admin') {
       // Admin gets count of all unread messages
-      const result = await db.get('SELECT COUNT(*) as count FROM messages WHERE is_read = 0');
+      const result = await db.collection('messages').countDocuments({ is_read: false });
       count = result.count;
     } else {
       // Clients get count of their unread messages from admin
-      const result = await db.get(
-        'SELECT COUNT(*) as count FROM messages WHERE receiver_id = ? AND sender_id IN (SELECT id FROM users WHERE role = \'admin\') AND is_read = 0',
-        [userId]
-      );
+      const result = await db.collection('messages').countDocuments({ receiver_id: userId, is_read: false });
       count = result.count;
     }
 
@@ -159,21 +150,21 @@ router.get('/unread-count', auth, async (req, res) => {
 // Mark messages as read
 router.put('/messages/read', auth, async (req, res) => {
   try {
+    const db = await connectToDatabase();
     const userId = req.user.id;
     const { message_ids } = req.body;
 
     if (message_ids && Array.isArray(message_ids)) {
       // Mark specific messages as read
-      const placeholders = message_ids.map(() => '?').join(',');
-      await db.run(
-        `UPDATE messages SET is_read = 1 WHERE id IN (${placeholders}) AND receiver_id = ?`,
-        [...message_ids, userId]
+      await db.collection('messages').updateMany(
+        { _id: { $in: message_ids.map(id => new ObjectId(id)) } },
+        { $set: { is_read: true } }
       );
     } else {
       // Mark all messages from admin as read for the user
-      await db.run(
-        'UPDATE messages SET is_read = 1 WHERE receiver_id = ? AND sender_id IN (SELECT id FROM users WHERE role = \'admin\') AND is_read = 0',
-        [userId]
+      await db.collection('messages').updateMany(
+        { receiver_id: userId, sender_id: { $in: (await db.collection('users').find({ role: 'admin' }).toArray()).map(admin => admin.id) }, is_read: false },
+        { $set: { is_read: true } }
       );
     }
 
@@ -193,20 +184,31 @@ router.put('/messages/read', auth, async (req, res) => {
 // Get chat participants (for admin)
 router.get('/participants', adminAuth, async (req, res) => {
   try {
-    const participants = await db.all(`
-      SELECT DISTINCT
-        u.id,
-        u.username,
-        u.email,
-        u.role,
-        COUNT(m.id) as message_count,
-        MAX(m.created_at) as last_message_at
-      FROM users u
-      LEFT JOIN messages m ON u.id = m.sender_id OR u.id = m.receiver_id
-      WHERE u.role = 'client'
-      GROUP BY u.id
-      ORDER BY last_message_at DESC NULLS LAST
-    `);
+    const db = await connectToDatabase();
+    const participants = await db.collection('users')
+      .aggregate([
+        { $match: { role: 'client' } },
+        {
+          $lookup: {
+            from: 'messages',
+            localField: 'id',
+            foreignField: { $or: [{ sender_id: '$_id' }, { receiver_id: '$_id' }] },
+            as: 'messages'
+          }
+        },
+        {
+          $project: {
+            _id: 1,
+            username: 1,
+            email: 1,
+            role: 1,
+            message_count: { $size: '$messages' },
+            last_message_at: { $max: '$messages.created_at' }
+          }
+        },
+        { $sort: { last_message_at: -1 } }
+      ])
+      .toArray();
 
     res.json({
       success: true,
@@ -224,12 +226,13 @@ router.get('/participants', adminAuth, async (req, res) => {
 // Get conversation with specific client (for admin)
 router.get('/conversation/:clientId', adminAuth, async (req, res) => {
   try {
+    const db = await connectToDatabase();
     const { clientId } = req.params;
     const { page = 1, limit = 50 } = req.query;
-    const offset = (page - 1) * limit;
+    const skip = (page - 1) * limit;
 
     // Verify client exists
-    const client = await db.get('SELECT id FROM users WHERE id = ? AND role = ?', [clientId, 'client']);
+    const client = await db.collection('users').findOne({ _id: new ObjectId(clientId), role: 'client' });
     if (!client) {
       return res.status(404).json({
         success: false,
@@ -237,26 +240,26 @@ router.get('/conversation/:clientId', adminAuth, async (req, res) => {
       });
     }
 
-    const messages = await db.all(`
-      SELECT 
-        m.*,
-        u.username as sender_name,
-        u.role as sender_role
-      FROM messages m
-      JOIN users u ON m.sender_id = u.id
-      WHERE (m.sender_id = ? AND m.receiver_id IS NULL) OR (m.receiver_id = ? AND m.sender_id IN (SELECT id FROM users WHERE role = 'admin'))
-      ORDER BY m.created_at DESC
-      LIMIT ? OFFSET ?
-    `, [clientId, clientId, limit, offset]);
+    const messages = await db.collection('messages')
+      .find({
+        $or: [
+          { sender_id: clientId, receiver_id: null },
+          { receiver_id: clientId, sender_id: { $in: (await db.collection('users').find({ role: 'admin' }).toArray()).map(admin => admin.id) } }
+        ]
+      })
+      .sort({ created_at: -1 })
+      .skip(Number(skip))
+      .limit(Number(limit))
+      .toArray();
 
     // Mark messages as read
-    await db.run(
-      'UPDATE messages SET is_read = 1 WHERE sender_id = ? AND receiver_id IS NULL AND is_read = 0',
-      [clientId]
+    await db.collection('messages').updateMany(
+      { sender_id: clientId, receiver_id: null, is_read: false },
+      { $set: { is_read: true } }
     );
-    await db.run(
-      'UPDATE messages SET is_read = 1 WHERE receiver_id = ? AND sender_id IN (SELECT id FROM users WHERE role = \'admin\') AND is_read = 0',
-      [clientId]
+    await db.collection('messages').updateMany(
+      { receiver_id: clientId, sender_id: { $in: (await db.collection('users').find({ role: 'admin' }).toArray()).map(admin => admin.id) }, is_read: false },
+      { $set: { is_read: true } }
     );
 
     res.json({

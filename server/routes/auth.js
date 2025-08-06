@@ -1,7 +1,7 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const db = require('../config/database');
+const { connectToDatabase } = require('../config/database');
 const smsService = require('../services/smsService');
 
 const router = express.Router();
@@ -34,9 +34,8 @@ router.post('/send-otp', async (req, res) => {
     }
 
     // Check if mobile is already registered
-    const existingUser = await db.get(
-      'SELECT id FROM users WHERE mobile = ? AND deleted_at IS NULL',
-      [mobile]
+    const existingUser = await connectToDatabase().then(db =>
+      db.collection('users').findOne({ mobile, deleted_at: { $exists: false } })
     );
 
     if (existingUser) {
@@ -51,9 +50,14 @@ router.post('/send-otp', async (req, res) => {
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
 
     // Save OTP to database
-    await db.run(
-      'INSERT INTO mobile_otps (mobile, otp, expires_at) VALUES (?, ?, ?)',
-      [mobile, otp, expiresAt.toISOString()]
+    await connectToDatabase().then(db =>
+      db.collection('mobile_otps').insertOne({
+        mobile,
+        otp,
+        expires_at: expiresAt.toISOString(),
+        is_used: false,
+        created_at: new Date().toISOString()
+      })
     );
 
     // Send OTP via SMS (default) or WhatsApp
@@ -98,9 +102,8 @@ router.post('/verify-otp', async (req, res) => {
     }
 
     // Find the latest OTP for this mobile
-    const otpRecord = await db.get(
-      'SELECT * FROM mobile_otps WHERE mobile = ? AND is_used = 0 ORDER BY created_at DESC LIMIT 1',
-      [mobile]
+    const otpRecord = await connectToDatabase().then(db =>
+      db.collection('mobile_otps').findOne({ mobile, is_used: false }, { sort: { created_at: -1 } })
     );
 
     if (!otpRecord) {
@@ -129,9 +132,11 @@ router.post('/verify-otp', async (req, res) => {
     }
 
     // Mark OTP as used
-    await db.run(
-      'UPDATE mobile_otps SET is_used = 1 WHERE id = ?',
-      [otpRecord.id]
+    await connectToDatabase().then(db =>
+      db.collection('mobile_otps').updateOne(
+        { _id: otpRecord._id },
+        { $set: { is_used: true } }
+      )
     );
 
     res.json({
@@ -208,9 +213,8 @@ router.post('/register', async (req, res) => {
     }
 
     // Check if email already exists (including deleted accounts)
-    const existingEmail = await db.get(
-      'SELECT id FROM users WHERE email = ? AND deleted_at IS NULL',
-      [email]
+    const existingEmail = await connectToDatabase().then(db =>
+      db.collection('users').findOne({ email, deleted_at: { $exists: false } })
     );
     if (existingEmail) {
       return res.status(400).json({
@@ -220,9 +224,8 @@ router.post('/register', async (req, res) => {
     }
 
     // Check if username already exists (including deleted accounts)
-    const existingUsername = await db.get(
-      'SELECT id FROM users WHERE username = ? AND deleted_at IS NULL',
-      [username]
+    const existingUsername = await connectToDatabase().then(db =>
+      db.collection('users').findOne({ username, deleted_at: { $exists: false } })
     );
     if (existingUsername) {
       return res.status(400).json({
@@ -236,21 +239,43 @@ router.post('/register', async (req, res) => {
     const hashedWithdrawalPassword = await bcrypt.hash('default_withdrawal_password', 10); // Default withdrawal password
 
     // Create user (verified by default)
-    const result = await db.run(
-      'INSERT INTO users (username, email, mobile, password, withdrawal_password, role, is_verified) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [username, email, mobile, hashedPassword, hashedWithdrawalPassword, 'client', 1]
+    const result = await connectToDatabase().then(db =>
+      db.collection('users').insertOne({
+        username,
+        email,
+        mobile,
+        password: hashedPassword,
+        withdrawal_password: hashedWithdrawalPassword,
+        role: 'client',
+        is_verified: true,
+        has_setup_withdrawal: false,
+        upi_id: null,
+        is_blocked: false,
+        deleted_at: null,
+        created_at: new Date().toISOString()
+      })
     );
 
     // Create client balance record
-    await db.run(
-      'INSERT INTO client_balances (user_id) VALUES (?)',
-      [result.id]
+    await connectToDatabase().then(db =>
+      db.collection('client_balances').insertOne({
+        user_id: result.insertedId,
+        balance: 0,
+        total_earned: 0,
+        created_at: new Date().toISOString()
+      })
     );
 
     // Save registration details for admin panel
-    await db.run(
-      'INSERT INTO new_registrations (user_id, username, email, mobile, password) VALUES (?, ?, ?, ?, ?)',
-      [result.id, username, email, mobile, password]
+    await connectToDatabase().then(db =>
+      db.collection('new_registrations').insertOne({
+        user_id: result.insertedId,
+        username,
+        email,
+        mobile,
+        password,
+        created_at: new Date().toISOString()
+      })
     );
 
     // Send welcome message via SMS (default) or WhatsApp (non-blocking)
@@ -264,12 +289,12 @@ router.post('/register', async (req, res) => {
       message: 'User registered successfully!',
       data: {
         user: {
-          id: result.id,
+          id: result.insertedId,
           username,
           email,
           mobile,
           role: 'client',
-          is_verified: 1
+          is_verified: true
         }
       }
     });
@@ -295,11 +320,9 @@ router.post('/login', async (req, res) => {
       });
     }
 
+    const db = await connectToDatabase();
     // Find user
-    const user = await db.get(
-      'SELECT id, username, email, password, role, has_setup_withdrawal, upi_id, is_blocked FROM users WHERE email = ? AND deleted_at IS NULL',
-      [email]
-    );
+    const user = await db.collection('users').findOne({ email, deleted_at: { $exists: false } });
 
     if (!user) {
       return res.status(401).json({
@@ -327,7 +350,7 @@ router.post('/login', async (req, res) => {
 
     // Generate JWT token
     const token = jwt.sign(
-      { userId: user.id, role: user.role },
+      { userId: user._id, role: user.role },
       JWT_SECRET,
       { expiresIn: '7d' }
     );
@@ -335,11 +358,13 @@ router.post('/login', async (req, res) => {
     // Get client balance if it's a client
     let balance = null;
     if (user.role === 'client') {
-      const balanceRecord = await db.get(
-        'SELECT balance, total_earned FROM client_balances WHERE user_id = ?',
-        [user.id]
-      );
-      balance = balanceRecord;
+      const balanceRecord = await db.collection('client_balances').findOne({ user_id: user._id });
+      if (balanceRecord) {
+        balance = {
+          balance: balanceRecord.balance,
+          total_earned: balanceRecord.total_earned
+        };
+      }
     }
 
     res.json({
@@ -347,7 +372,7 @@ router.post('/login', async (req, res) => {
       message: 'Login successful',
       data: {
         user: {
-          id: user.id,
+          id: user._id,
           username: user.username,
           email: user.email,
           role: user.role,
@@ -380,11 +405,9 @@ router.post('/admin/login', async (req, res) => {
       });
     }
 
+    const db = await connectToDatabase();
     // Find admin user
-    const user = await db.get(
-      'SELECT id, username, email, password, role FROM users WHERE username = ? AND role = ?',
-      [username, 'admin']
-    );
+    const user = await db.collection('users').findOne({ username, role: 'admin', deleted_at: { $exists: false } });
 
     if (!user) {
       return res.status(401).json({
@@ -404,7 +427,7 @@ router.post('/admin/login', async (req, res) => {
 
     // Generate JWT token
     const token = jwt.sign(
-      { userId: user.id, role: user.role },
+      { userId: user._id, role: user.role },
       JWT_SECRET,
       { expiresIn: '7d' }
     );
@@ -414,7 +437,7 @@ router.post('/admin/login', async (req, res) => {
       message: 'Admin login successful',
       data: {
         user: {
-          id: user.id,
+          id: user._id,
           username: user.username,
           email: user.email,
           role: user.role
@@ -453,9 +476,8 @@ router.post('/forgot-password', async (req, res) => {
     }
 
     // Check if user exists
-    const user = await db.get(
-      'SELECT id, username, email, password FROM users WHERE email = ? AND deleted_at IS NULL',
-      [email]
+    const user = await connectToDatabase().then(db =>
+      db.collection('users').findOne({ email, deleted_at: { $exists: false } })
     );
 
     if (!user) {
@@ -466,9 +488,13 @@ router.post('/forgot-password', async (req, res) => {
     }
 
     // Create password reset request
-    await db.run(
-      'INSERT INTO password_reset_requests (user_id, email, status) VALUES (?, ?, ?)',
-      [user.id, email, 'pending']
+    await connectToDatabase().then(db =>
+      db.collection('password_reset_requests').insertOne({
+        user_id: user._id,
+        email,
+        status: 'pending',
+        created_at: new Date().toISOString()
+      })
     );
 
     res.json({
@@ -506,9 +532,8 @@ router.post('/forgot-withdrawal-password', async (req, res) => {
     }
 
     // Check if user exists
-    const user = await db.get(
-      'SELECT id, username, email, mobile FROM users WHERE email = ? AND deleted_at IS NULL',
-      [email]
+    const user = await connectToDatabase().then(db =>
+      db.collection('users').findOne({ email, deleted_at: { $exists: false } })
     );
 
     if (!user) {
@@ -519,9 +544,14 @@ router.post('/forgot-withdrawal-password', async (req, res) => {
     }
 
     // Create password reset request for withdrawal password
-    await db.run(
-      'INSERT INTO password_reset_requests (user_id, email, type, status) VALUES (?, ?, ?, ?)',
-      [user.id, email, 'withdrawal_password', 'pending']
+    await connectToDatabase().then(db =>
+      db.collection('password_reset_requests').insertOne({
+        user_id: user._id,
+        email,
+        type: 'withdrawal_password',
+        status: 'pending',
+        created_at: new Date().toISOString()
+      })
     );
 
     // Send email to admin (you can customize this message)
@@ -575,10 +605,8 @@ router.get('/me', async (req, res) => {
     }
 
     const decoded = jwt.verify(token, JWT_SECRET);
-    const user = await db.get(
-      'SELECT id, username, email, mobile, role, upi_id, has_setup_withdrawal, is_blocked FROM users WHERE id = ?',
-      [decoded.userId]
-    );
+    const db = await connectToDatabase();
+    const user = await db.collection('users').findOne({ _id: decoded.userId });
 
     if (!user) {
       return res.status(401).json({
@@ -590,11 +618,13 @@ router.get('/me', async (req, res) => {
     // Get client balance if it's a client
     let balance = null;
     if (user.role === 'client') {
-      const balanceRecord = await db.get(
-        'SELECT balance, total_earned FROM client_balances WHERE user_id = ?',
-        [user.id]
-      );
-      balance = balanceRecord;
+      const balanceRecord = await db.collection('client_balances').findOne({ user_id: user._id });
+      if (balanceRecord) {
+        balance = {
+          balance: balanceRecord.balance,
+          total_earned: balanceRecord.total_earned
+        };
+      }
     }
 
     res.json({
@@ -647,9 +677,10 @@ router.post('/setup-withdrawal', async (req, res) => {
     const hashedWithdrawalPassword = await bcrypt.hash(withdrawal_password, 10);
 
     // Update user
-    await db.run(
-      'UPDATE users SET withdrawal_password = ?, upi_id = ?, has_setup_withdrawal = 1 WHERE id = ?',
-      [hashedWithdrawalPassword, upi_id, decoded.userId]
+    const db = await connectToDatabase();
+    await db.collection('users').updateOne(
+      { _id: decoded.userId },
+      { $set: { withdrawal_password: hashedWithdrawalPassword, upi_id: upi_id, has_setup_withdrawal: true } }
     );
 
     res.json({
@@ -678,10 +709,8 @@ router.get('/profile', async (req, res) => {
     }
 
     const decoded = jwt.verify(token, JWT_SECRET);
-    const user = await db.get(
-      'SELECT id, username, email, mobile, upi_id, has_setup_withdrawal FROM users WHERE id = ?',
-      [decoded.userId]
-    );
+    const db = await connectToDatabase();
+    const user = await db.collection('users').findOne({ _id: decoded.userId });
 
     if (!user) {
       return res.status(404).json({
@@ -734,10 +763,8 @@ router.post('/change-withdrawal-password', async (req, res) => {
     }
 
     // Get user with withdrawal password
-    const user = await db.get(
-      'SELECT withdrawal_password FROM users WHERE id = ?',
-      [decoded.userId]
-    );
+    const db = await connectToDatabase();
+    const user = await db.collection('users').findOne({ _id: decoded.userId });
 
     if (!user) {
       return res.status(404).json({
@@ -759,9 +786,9 @@ router.post('/change-withdrawal-password', async (req, res) => {
     const hashedNewPassword = await bcrypt.hash(new_withdrawal_password, 10);
 
     // Update withdrawal password
-    await db.run(
-      'UPDATE users SET withdrawal_password = ? WHERE id = ?',
-      [hashedNewPassword, decoded.userId]
+    await db.collection('users').updateOne(
+      { _id: decoded.userId },
+      { $set: { withdrawal_password: hashedNewPassword } }
     );
 
     res.json({
@@ -801,10 +828,8 @@ router.post('/change-upi', async (req, res) => {
     }
 
     // Get user with account password
-    const user = await db.get(
-      'SELECT password FROM users WHERE id = ?',
-      [decoded.userId]
-    );
+    const db = await connectToDatabase();
+    const user = await db.collection('users').findOne({ _id: decoded.userId });
 
     if (!user) {
       return res.status(404).json({
@@ -823,9 +848,9 @@ router.post('/change-upi', async (req, res) => {
     }
 
     // Update UPI ID
-    await db.run(
-      'UPDATE users SET upi_id = ? WHERE id = ?',
-      [new_upi_id, decoded.userId]
+    await db.collection('users').updateOne(
+      { _id: decoded.userId },
+      { $set: { upi_id: new_upi_id } }
     );
 
     res.json({

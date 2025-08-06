@@ -1,7 +1,7 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const { clientAuth } = require('../middleware/auth');
-const db = require('../config/database');
+const { connectToDatabase } = require('../config/database');
 const { v4: uuidv4 } = require('uuid');
 
 const router = express.Router();
@@ -9,18 +9,8 @@ const router = express.Router();
 // Get available loots
 router.get('/loots', clientAuth, async (req, res) => {
   try {
-    const loots = await db.all(`
-      SELECT 
-        l.*,
-        COUNT(i.id) as investment_count,
-        SUM(i.amount) as total_invested
-      FROM loots l
-      LEFT JOIN investments i ON l.id = i.loot_id
-      WHERE l.is_active = 1
-      GROUP BY l.id
-      ORDER BY l.created_at DESC
-    `);
-
+    const db = await connectToDatabase();
+    const loots = await db.collection('loots').find({ is_active: true }).sort({ created_at: -1 }).toArray();
     res.json({
       success: true,
       data: loots
@@ -67,7 +57,8 @@ router.post('/invest', clientAuth, async (req, res) => {
     }
 
     // Check if loot exists and is active
-    const loot = await db.get('SELECT * FROM loots WHERE id = ? AND is_active = 1', [loot_id]);
+    const db = await connectToDatabase();
+    const loot = await db.collection('loots').findOne({ _id: loot_id, is_active: true });
     if (!loot) {
       return res.status(404).json({
         success: false,
@@ -90,12 +81,17 @@ router.post('/invest', clientAuth, async (req, res) => {
     const referralCode = `${userId}_${loot_id}_${uuidv4().substring(0, 8)}`;
 
     // Create investment with custom amounts
-    const result = await db.run(
-      'INSERT INTO investments (user_id, loot_id, amount, customer_amount, earn_amount, referral_code) VALUES (?, ?, ?, ?, ?, ?)',
-      [userId, loot_id, total_amount, customer_amount, earn_amount, referralCode]
-    );
+    const result = await db.collection('investments').insertOne({
+      user_id: userId,
+      loot_id: loot_id,
+      amount: total_amount,
+      customer_amount: customer_amount,
+      earn_amount: earn_amount,
+      referral_code: referralCode,
+      created_at: new Date()
+    });
 
-    const investment = await db.get('SELECT * FROM investments WHERE id = ?', [result.id]);
+    const investment = await db.collection('investments').findOne({ _id: result.insertedId });
 
     res.status(201).json({
       success: true,
@@ -118,12 +114,10 @@ router.post('/invest', clientAuth, async (req, res) => {
 // Get client balance
 router.get('/balance', clientAuth, async (req, res) => {
   try {
+    const db = await connectToDatabase();
     const userId = req.user.id;
 
-    const balance = await db.get(
-      'SELECT balance, total_earned FROM client_balances WHERE user_id = ?',
-      [userId]
-    );
+    const balance = await db.collection('client_balances').findOne({ user_id: userId });
 
     if (!balance) {
       return res.status(404).json({
@@ -167,10 +161,8 @@ router.post('/withdraw', clientAuth, async (req, res) => {
     }
 
     // Check client balance
-    const balance = await db.get(
-      'SELECT balance FROM client_balances WHERE user_id = ?',
-      [userId]
-    );
+    const db = await connectToDatabase();
+    const balance = await db.collection('client_balances').findOne({ user_id: userId });
 
     if (!balance) {
       return res.status(404).json({
@@ -187,10 +179,7 @@ router.post('/withdraw', clientAuth, async (req, res) => {
     }
 
     // Get user's withdrawal password and UPI ID
-    const user = await db.get(
-      'SELECT withdrawal_password, upi_id FROM users WHERE id = ?',
-      [userId]
-    );
+    const user = await db.collection('users').findOne({ _id: userId });
 
     if (!user) {
       return res.status(404).json({
@@ -216,9 +205,15 @@ router.post('/withdraw', clientAuth, async (req, res) => {
     }
 
     // Save withdrawal with stored UPI ID
-    const result = await db.run('INSERT INTO withdrawals (user_id, amount, upi_id, status) VALUES (?, ?, ?, ?)', [req.user.id, amount, user.upi_id, 'pending']);
+    const result = await db.collection('withdrawals').insertOne({
+      user_id: userId,
+      amount: amount,
+      upi_id: user.upi_id,
+      status: 'pending',
+      created_at: new Date()
+    });
 
-    const withdrawal = await db.get('SELECT * FROM withdrawals WHERE id = ?', [result.lastID]);
+    const withdrawal = await db.collection('withdrawals').findOne({ _id: result.insertedId });
 
     res.status(201).json({
       success: true,
@@ -237,22 +232,10 @@ router.post('/withdraw', clientAuth, async (req, res) => {
 // Get client investments
 router.get('/investments', clientAuth, async (req, res) => {
   try {
+    const db = await connectToDatabase();
     const userId = req.user.id;
 
-    const investments = await db.all(`
-      SELECT 
-        i.*,
-        l.title as loot_title,
-        l.description as loot_description,
-        COUNT(CASE WHEN r.status = 'completed' THEN r.id END) as referral_count,
-        SUM(CASE WHEN r.status = 'completed' THEN i.earn_amount ELSE 0 END) as referral_amount
-      FROM investments i
-      JOIN loots l ON i.loot_id = l.id
-      LEFT JOIN referrals r ON i.id = r.investment_id
-      WHERE i.user_id = ?
-      GROUP BY i.id
-      ORDER BY i.created_at DESC
-    `, [userId]);
+    const investments = await db.collection('investments').find({ user_id: userId }).sort({ created_at: -1 }).toArray();
 
     res.json({
       success: true,
@@ -270,12 +253,10 @@ router.get('/investments', clientAuth, async (req, res) => {
 // Get client withdrawals
 router.get('/withdrawals', clientAuth, async (req, res) => {
   try {
+    const db = await connectToDatabase();
     const userId = req.user.id;
 
-    const withdrawals = await db.all(
-      'SELECT * FROM withdrawals WHERE user_id = ? ORDER BY created_at DESC',
-      [userId]
-    );
+    const withdrawals = await db.collection('withdrawals').find({ user_id: userId }).sort({ created_at: -1 }).toArray();
 
     res.json({
       success: true,
@@ -293,21 +274,10 @@ router.get('/withdrawals', clientAuth, async (req, res) => {
 // Get referral history
 router.get('/referrals', clientAuth, async (req, res) => {
   try {
+    const db = await connectToDatabase();
     const userId = req.user.id;
 
-    const referrals = await db.all(`
-      SELECT 
-        r.*, 
-        i.referral_code, 
-        i.earn_amount, 
-        l.title as loot_title,
-        r.rejection_reason
-      FROM referrals r
-      JOIN investments i ON r.investment_id = i.id
-      JOIN loots l ON i.loot_id = l.id
-      WHERE i.user_id = ?
-      ORDER BY r.created_at DESC
-    `, [userId]);
+    const referrals = await db.collection('referrals').find({ investment_id: { $in: await db.collection('investments').find({ user_id: userId }).project({ _id: 1 }).toArray() } }).sort({ created_at: -1 }).toArray();
 
     res.json({
       success: true,
@@ -325,7 +295,8 @@ router.get('/referrals', clientAuth, async (req, res) => {
 // Get client profile (UPI ID)
 router.get('/profile', clientAuth, async (req, res) => {
   try {
-    const user = await db.get('SELECT upi_id FROM users WHERE id = ?', [req.user.id]);
+    const db = await connectToDatabase();
+    const user = await db.collection('users').findOne({ _id: req.user.id });
     res.json({ success: true, data: { upi_id: user?.upi_id || '' } });
   } catch (error) {
     res.status(500).json({ success: false, message: 'Internal server error' });
@@ -339,7 +310,8 @@ router.put('/profile', clientAuth, async (req, res) => {
     if (!upi_id || typeof upi_id !== 'string' || upi_id.length < 3) {
       return res.status(400).json({ success: false, message: 'Valid UPI ID required' });
     }
-    await db.run('UPDATE users SET upi_id = ? WHERE id = ?', [upi_id, req.user.id]);
+    const db = await connectToDatabase();
+    await db.collection('users').updateOne({ _id: req.user.id }, { $set: { upi_id: upi_id } });
     res.json({ success: true, message: 'UPI ID updated' });
   } catch (error) {
     res.status(500).json({ success: false, message: 'Internal server error' });
@@ -351,13 +323,11 @@ router.put('/profile', clientAuth, async (req, res) => {
 // Get current leaderboard position for client
 router.get('/leaderboard/position', clientAuth, async (req, res) => {
   try {
+    const db = await connectToDatabase();
     const userId = req.user.id;
 
     // Get active season
-    const activeSeason = await db.get(
-      'SELECT * FROM leaderboard_seasons WHERE status = ?',
-      ['active']
-    );
+    const activeSeason = await db.collection('leaderboard_seasons').findOne({ status: 'active' });
 
     if (!activeSeason) {
       return res.json({
@@ -370,25 +340,13 @@ router.get('/leaderboard/position', clientAuth, async (req, res) => {
     }
 
     // Get client's entry in current leaderboard
-    const clientEntry = await db.get(
-      'SELECT * FROM leaderboard_entries WHERE season_id = ? AND user_id = ?',
-      [activeSeason.id, userId]
-    );
+    const clientEntry = await db.collection('leaderboard_entries').findOne({ season_id: activeSeason._id, user_id: userId });
 
     // Get top 10 entries for leaderboard display
-    const topEntries = await db.all(`
-      SELECT username, total_earned, rank 
-      FROM leaderboard_entries 
-      WHERE season_id = ? 
-      ORDER BY total_earned DESC 
-      LIMIT 10
-    `, [activeSeason.id]);
+    const topEntries = await db.collection('leaderboard_entries').find({ season_id: activeSeason._id }).sort({ total_earned: -1 }).limit(10).toArray();
 
     // Get total participants
-    const totalParticipants = await db.get(
-      'SELECT COUNT(*) as count FROM leaderboard_entries WHERE season_id = ?',
-      [activeSeason.id]
-    );
+    const totalParticipants = await db.collection('leaderboard_entries').countDocuments({ season_id: activeSeason._id });
 
     res.json({
       success: true,
@@ -412,25 +370,11 @@ router.get('/leaderboard/position', clientAuth, async (req, res) => {
 // Get leaderboard history for client
 router.get('/leaderboard/history', clientAuth, async (req, res) => {
   try {
+    const db = await connectToDatabase();
     const userId = req.user.id;
 
     // Get all ended seasons where client participated
-    const seasons = await db.all(`
-      SELECT 
-        ls.id,
-        ls.name,
-        ls.start_date,
-        ls.end_date,
-        ls.bonus_amount,
-        le.total_earned,
-        le.rank,
-        lw.bonus_amount as won_bonus
-      FROM leaderboard_seasons ls
-      LEFT JOIN leaderboard_entries le ON ls.id = le.season_id AND le.user_id = ?
-      LEFT JOIN leaderboard_winners lw ON ls.id = lw.season_id AND lw.user_id = ?
-      WHERE ls.status = 'ended'
-      ORDER BY ls.end_date DESC
-    `, [userId, userId]);
+    const seasons = await db.collection('leaderboard_seasons').find({ status: 'ended' }).sort({ end_date: -1 }).toArray();
 
     res.json({
       success: true,
@@ -448,21 +392,8 @@ router.get('/leaderboard/history', clientAuth, async (req, res) => {
 // Get all winners history
 router.get('/leaderboard/winners-history', clientAuth, async (req, res) => {
   try {
-    const winners = await db.all(`
-      SELECT 
-        ls.name as season_name,
-        ls.start_date,
-        ls.end_date,
-        lw.username,
-        lw.rank,
-        lw.total_earned,
-        lw.bonus_amount,
-        lw.announced_at
-      FROM leaderboard_winners lw
-      JOIN leaderboard_seasons ls ON lw.season_id = ls.id
-      WHERE ls.status = 'ended'
-      ORDER BY ls.end_date DESC, lw.rank ASC
-    `);
+    const db = await connectToDatabase();
+    const winners = await db.collection('leaderboard_winners').find({ season_id: { $in: await db.collection('leaderboard_seasons').find({ status: 'ended' }).project({ _id: 1 }).toArray() } }).sort({ announced_at: -1 }).toArray();
 
     res.json({
       success: true,

@@ -11,7 +11,7 @@ require('dotenv').config();
 // Set timezone to India (Mumbai)
 // moment.tz.setDefault('Asia/Kolkata');
 
-const db = require('./config/database');
+const { connectToDatabase } = require('./config/database');
 const authRoutes = require('./routes/auth');
 const adminRoutes = require('./routes/admin');
 const clientRoutes = require('./routes/client');
@@ -181,17 +181,17 @@ app.use((req, res) => {
 
 const PORT = process.env.PORT || 5000;
 
-// Initialize database and start server
-db.initialize()
-  .then(() => {
+// Initialize MongoDB and start server
+connectToDatabase()
+  .then((db) => {
     server.listen(PORT, () => {
       console.log(`🚀 Capital Rise server running on port ${PORT}`);
-      console.log(`📊 Database initialized successfully`);
+      console.log(`📊 Connected to MongoDB successfully`);
       console.log(`🔗 API available at http://localhost:${PORT}/api`);
     });
   })
   .catch(err => {
-    console.error('Failed to initialize database:', err);
+    console.error('Failed to connect to MongoDB:', err);
     process.exit(1);
   });
 

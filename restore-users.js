@@ -1,4 +1,4 @@
-const sqlite3 = require('sqlite3').verbose();
+const { MongoClient } = require('mongodb');
 const fs = require('fs');
 const bcrypt = require('bcryptjs');
 
@@ -19,41 +19,29 @@ const balanceData = JSON.parse(fs.readFileSync('./balance-data-backup.json', 'ut
 
 console.log(`📊 Restoring ${userData.totalUsers} users and ${balanceData.totalBalances} balance records...\n`);
 
-// Use the same database path as the main app
-const dbPath = process.env.DB_PATH || './database/capital_rise.db';
-const db = new sqlite3.Database(dbPath);
+// MongoDB connection URI and DB name
+const uri = process.env.MONGO_URI || 'mongodb://localhost:27017';
+const dbName = process.env.MONGO_DB || 'capital_rise';
+const client = new MongoClient(uri);
 
-async function restoreUsers() {
+async function restoreUsers(db) {
+  const usersCollection = db.collection('users');
   for (const user of userData.users) {
     try {
       // Check if user already exists
-      const existingUser = await new Promise((resolve, reject) => {
-        db.get('SELECT id FROM users WHERE email = ?', [user.email], (err, row) => {
-          if (err) reject(err);
-          else resolve(row);
-        });
-      });
-
+      const existingUser = await usersCollection.findOne({ email: user.email });
       if (!existingUser) {
         // Insert user
-        await new Promise((resolve, reject) => {
-          db.run(`
-            INSERT INTO users (username, email, mobile, password, role, upi_id, withdrawal_password, has_setup_withdrawal, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-          `, [
-            user.username,
-            user.email,
-            user.mobile,
-            user.password,
-            user.role,
-            user.upi_id,
-            user.withdrawal_password,
-            user.has_setup_withdrawal,
-            user.created_at
-          ], function(err) {
-            if (err) reject(err);
-            else resolve(this.lastID);
-          });
+        await usersCollection.insertOne({
+          username: user.username,
+          email: user.email,
+          mobile: user.mobile,
+          password: user.password,
+          role: user.role,
+          upi_id: user.upi_id,
+          withdrawal_password: user.withdrawal_password,
+          has_setup_withdrawal: user.has_setup_withdrawal,
+          created_at: user.created_at
         });
         console.log(`✅ Restored user: ${user.username} (${user.email})`);
       } else {
@@ -65,32 +53,19 @@ async function restoreUsers() {
   }
 }
 
-async function restoreBalances() {
+async function restoreBalances(db) {
+  const balancesCollection = db.collection('client_balances');
   for (const balance of balanceData.balances) {
     try {
       // Check if balance already exists
-      const existingBalance = await new Promise((resolve, reject) => {
-        db.get('SELECT id FROM client_balances WHERE user_id = ?', [balance.user_id], (err, row) => {
-          if (err) reject(err);
-          else resolve(row);
-        });
-      });
-
+      const existingBalance = await balancesCollection.findOne({ user_id: balance.user_id });
       if (!existingBalance) {
         // Insert balance
-        await new Promise((resolve, reject) => {
-          db.run(`
-            INSERT INTO client_balances (user_id, balance, total_earned, created_at)
-            VALUES (?, ?, ?, ?)
-          `, [
-            balance.user_id,
-            balance.balance,
-            balance.total_earned,
-            balance.created_at
-          ], function(err) {
-            if (err) reject(err);
-            else resolve(this.lastID);
-          });
+        await balancesCollection.insertOne({
+          user_id: balance.user_id,
+          balance: balance.balance,
+          total_earned: balance.total_earned,
+          created_at: balance.created_at
         });
         console.log(`✅ Restored balance for user_id: ${balance.user_id}`);
       } else {
@@ -104,13 +79,15 @@ async function restoreBalances() {
 
 async function restore() {
   try {
-    await restoreUsers();
-    await restoreBalances();
+    await client.connect();
+    const db = client.db(dbName);
+    await restoreUsers(db);
+    await restoreBalances(db);
     console.log('\n🎉 Data restoration completed!');
   } catch (error) {
     console.error('❌ Restoration failed:', error);
   } finally {
-    db.close();
+    await client.close();
   }
 }
 
