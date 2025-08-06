@@ -8,6 +8,14 @@ import App from './App';
 import { AuthProvider } from './context/AuthContext';
 import { ChatProvider } from './context/AuthContext';
 
+// Set API base URL based on environment
+const API_BASE_URL = process.env.NODE_ENV === 'production' 
+  ? window.location.origin 
+  : 'http://localhost:5000';
+
+// Make API base URL available globally
+window.API_BASE_URL = API_BASE_URL;
+
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {

@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: capital-rise
+    env: node
+    plan: free
+    buildCommand: npm run install-all
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: MONGO_URI
+        sync: false
+      - key: MONGO_DB
+        value: capital_rise
+      - key: JWT_SECRET
+        sync: false
+      - key: CLIENT_URL
+        value: https://capital-rise.onrender.com
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_PHONE_NUMBER
+        sync: false
+      - key: TWILIO_WHATSAPP_NUMBER
+        sync: false 
