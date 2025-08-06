@@ -12,6 +12,7 @@ require('dotenv').config();
 // moment.tz.setDefault('Asia/Kolkata');
 
 const { connectToDatabase } = require('./config/database');
+const { initializeDatabase } = require('./database/init-database');
 const authRoutes = require('./routes/auth');
 const adminRoutes = require('./routes/admin');
 const clientRoutes = require('./routes/client');
@@ -183,7 +184,10 @@ const PORT = process.env.PORT || 5000;
 
 // Initialize MongoDB and start server
 connectToDatabase()
-  .then((db) => {
+  .then(async (db) => {
+    // Initialize database collections and indexes
+    await initializeDatabase();
+    
     server.listen(PORT, '0.0.0.0', () => {
       console.log(`🚀 Capital Rise server running on port ${PORT}`);
       console.log(`📊 Connected to MongoDB successfully`);
